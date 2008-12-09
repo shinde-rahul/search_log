@@ -1,0 +1,43 @@
+/* $Id */
+
+.search-log-filter {
+  float: right;
+  width: 150px;
+  border-left: 1px solid #ccc;
+  margin-left: 1em;
+  padding-left: 1em;
+  }
+
+.search-log-filter ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  margin-bottom: 1em;
+  }
+
+.search-log-filter .form-item,
+.search-log-filter .description {
+  clear: left;
+  }
+
+.search-log-filter .form-submit {
+  clear: both;
+  margin-top: 0.5em;
+  }
+
+.search-log-filter .form-text,
+.search-log-filter .jscalendar-icon {
+  float: left;
+  }
+
+.search-log-filter .form-text.jscalendar {
+  width: 7em;
+  }
+
+.search-log-filter div.form-item.jscalendar {
+  width: 100%;
+  }
+
+.search-log-table {
+  float: left;
+  }

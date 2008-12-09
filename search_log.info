@@ -1,0 +1,5 @@
+; $Id$
+
+name = Search Log
+description = Replaces default Search log of top search terms
+dependencies = search

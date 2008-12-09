@@ -1,0 +1,54 @@
+<?php
+// $Id$
+
+function search_log_install() {
+  switch ($GLOBALS['db_type']) {
+    case 'mysql':
+    case 'mysqli':
+      $table1 = db_query("
+        CREATE TABLE {search_log} (
+          `qid` INT( 11 ) NOT NULL AUTO_INCREMENT ,
+          `q` VARCHAR( 255 ) NOT NULL ,
+          `module` VARCHAR( 255 ) NOT NULL ,
+          `time` INT( 11 ) NULL DEFAULT '0',
+          `counter` INT( 11 ) NULL DEFAULT '0',
+          `failed` TINYINT( 1 ) UNSIGNED NULL DEFAULT '0',
+          PRIMARY KEY ( `qid` ),
+          UNIQUE KEY `q` (q,module,time))");
+      break;
+
+    default:
+      drupal_set_message(t('Database type not supported by Saarch Log.'), 'error');
+      break;
+  }
+
+  if ($table1) {
+    drupal_set_message(t('Search Log installed successfully.'));
+  }
+  else {
+    drupal_set_message(t('Search Log installation unsuccessful. Tables may need to be installed manually.'), 'error');
+  }
+}
+
+function search_log_uninstall() {
+  if (db_table_exists('search_log')) {
+    db_query("DROP TABLE {search_log}");
+  }
+
+  $vars = array(
+    'search_log_terms',
+    'search_log_modules',
+    'search_log_rows',
+    'search_log_cron',
+    'search_log_block_max',
+    'search_log_block_count',
+    'search_log_block_modules',
+    'search_log_block_manual',
+  );
+  foreach ($vars as $var) {
+    variable_del($var);
+  }
+
+  drupal_set_message(t('Search Log tables and variables removed.'));
+  cache_clear_all();
+}
