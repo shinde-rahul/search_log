@@ -5,16 +5,16 @@ function search_log_install() {
   switch ($GLOBALS['db_type']) {
     case 'mysql':
     case 'mysqli':
-      $table1 = db_query("
-        CREATE TABLE {search_log} (
-          `qid` INT( 11 ) NOT NULL AUTO_INCREMENT ,
-          `q` VARCHAR( 255 ) NOT NULL ,
-          `module` VARCHAR( 255 ) NOT NULL ,
-          `time` INT( 11 ) NULL DEFAULT '0',
-          `counter` INT( 11 ) NULL DEFAULT '0',
-          `failed` TINYINT( 1 ) UNSIGNED NULL DEFAULT '0',
-          PRIMARY KEY ( `qid` ),
-          UNIQUE KEY `q` (q,module,time))");
+      $table1 = db_query("CREATE TABLE {search_log} (
+        qid int(11) NOT NULL AUTO_INCREMENT,
+        q varchar(255) NOT NULL,
+        module varchar(255) NOT NULL,
+        time int(11) NULL DEFAULT '0',
+        counter int(11) NULL DEFAULT '0',
+        failed tinyint(1) UNSIGNED NULL DEFAULT '0',
+        PRIMARY KEY (qid),
+        UNIQUE KEY (q,module(50),time)
+      ) /*!40100 DEFAULT CHARACTER SET utf8 */ ENGINE=MYISAM;");
       break;
 
     default:
