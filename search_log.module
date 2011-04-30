@@ -2,16 +2,12 @@
 
 /**
  * @file
- *  Replaces default search log of top search terms.
- *  
- *  The core Search module provides a simple list of top search phrases from 
- *  the watchdog log using the function watchdog_top. However, most sites clear 
- *  watchdog log frequently. Search Log stores search terms indefinitely and
- *  provides more robust reporting.
+ *  Replaces default report of top search phrases.
  */
 
 define('SEARCH_LOG_BLOCK', 0);
 define('SEARCH_LOG_BLOCK_CACHE', 'search_log_block');
+define('SEARCH_LOG_BLOCK_CACHE_TABLE', 'cache_block');
 
 define('SEARCH_LOG_STATUS_ALL', 0);
 define('SEARCH_LOG_STATUS_SUCCESS', 1);
@@ -24,471 +20,189 @@ define('SEARCH_LOG_TERMS_UPPERCASE_WORDS', 2);
 /**
  * Implementation of hook_menu().
  */
-function search_log_menu($may_cache) {
+function search_log_menu() {
   $items = array();
 
-  if ($may_cache) {
-    $items[] = array(
-      'path'                => 'admin/logs/search',
-      'title'               => t('Top search terms'),
-      'description'         => t('View most popular search terms.'),
-      'callback'            => 'search_log_report',
-      'callback arguments'  => array(),
-      'access'              => user_access('administer search'),
-    );
+  $items['admin/reports/search'] = array(
+    'title' => 'Top search terms',
+    'description' => 'View most popular search terms.',
+    'page callback' => 'search_log_report',
+    'page arguments' => array(3),
+    'access arguments' => array('administer search'),
+    'file' => 'search_log.admin.inc',
+  );
 
-    $items[] = array(
-      'path'                => 'admin/settings/search/default',
-      'title'               => t('Search'),
-      'type'                => MENU_DEFAULT_LOCAL_TASK,
-    );
-    $items[] = array(
-      'path'                => 'admin/settings/search/search_log',
-      'title'               => t('Search Log'),
-      'callback'            => 'drupal_get_form',
-      'callback arguments'  => array('search_log_settings'),
-      'access'              => user_access('administer search'),
-      'type'                => MENU_LOCAL_TASK,
-    );
-    $items[] = array(
-      'path'                => 'admin/settings/search/search_log/delete',
-      'title'               => t('Search Log'),
-      'callback'            => 'drupal_get_form',
-      'callback arguments'  => array('search_log_confirm_delete'),
-      'access'              => user_access('administer search'),
-      'type'                => MENU_CALLBACK,
-    );
-  }
+  // Add settings as task under the default search menu.
+  $items['admin/settings/search/default'] = array(
+    'title' => 'Search',
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+  );
+
+  $items['admin/settings/search/search_log'] = array(
+    'title' => 'Search log',
+    'description' => 'Setting for storing search results in the log.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('search_log_admin_settings'),
+    'access arguments' => array('administer search'),
+    'type' => MENU_LOCAL_TASK,
+    'file' => 'search_log.admin.inc',
+  );
+
+  $items['admin/settings/search/search_log/clear'] = array(
+    'title' => 'Search log',
+    'description' => 'Clear the search log.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('search_log_confirm_truncate'),
+    'access arguments' => array('administer search'),
+    'type' => MENU_CALLBACK,
+    'file' => 'search_log.admin.inc',
+  );
+
   return $items;
 }
 
 /**
- * Implementation of hook_form_alter()
+ * Implementation of hook_theme().
  */
-function search_log_form_alter($form_id, &$form) {
+function search_log_theme() {
+  return array(
+    'search_log_block' => array(
+      'arguments' => array('items' => NULL),
+    ),
+    'search_log_report' => array(
+      'file' => 'search_log.admin.inc',
+      'arguments' => array('table' => NULL, 'pager' => NULL, 'summary' => NULL, 'filters' => NULL),
+    ),
+    'search_log_summary' => array(
+      'file' => 'search_log.admin.inc',
+      'arguments' => array('total' => 0, 'unique' => 0, 'failed' => 0),
+    ),
+  );
+}
+    
+/**
+ * Implementation of hook_form_alter().
+ * 
+ * Alter standard search forms to capture submission.
+ */
+function search_log_form_alter($form, &$form_state, $form_id) {
   switch ($form_id) {
     case 'search_form':
     case 'search_block_form':
     case 'search_theme_form':
-      if (in_array($form['module']['#value'], array_flip((array)variable_get('search_log_modules', NULL)))) return;
-      $form['#submit'] = array_merge($form['#submit'], array('search_log_submit' => array()));
+      if (isset($form['module'])) {
+        if (!in_array($form['module']['#value'], variable_get('search_log_modules_enabled', array()))) {
+          return;
+        }
+      }
+
+      $form['#submit'][] = 'search_log_submit';
       break;
   }
+  
+  return $form;
 }
 
 /**
- * Core Search forms submit.
+ * Process standard search forms to capture keys.
  */
-function search_log_submit($form_id, $form_values) {
-  // Get search keys, exit if empty
-  $keys = isset($form_values['processed_keys']) ? $form_values['processed_keys'] : 
-    (isset($form_values['search_theme_form_keys']) ? $form_values['search_theme_form_keys'] : $form_values['search_block_form_keys']);
-  $module = isset($form_values['module']) ? $form_values['module'] : 'node';
+function search_log_submit($form, &$form_state) {
+  $keys = NULL;
+  $module = isset($form_state['values']['module']) ? $form_state['values']['module'] : 'node';
+
+  if (isset($form_state['values']['processed_keys'])) {
+    $keys = $form_state['values']['processed_keys'];
+  }
+  elseif (isset($form_state['values']['search_theme_form'])) {
+    $keys = $form_state['values']['search_theme_form'];
+  }
+  elseif (isset($form_state['values']['search_block_form'])) {
+    $keys = $form_state['values']['search_block_form'];
+  }  
+  
   if ($keys) {
     search_log($keys, $module);
   }
 }
 
 /**
- * Store search keys, module and time.
- */
-function search_log($keys, $module, $counter = 1, $results = TRUE) {
-  // Get keys, exit if empty
-  $keys = preg_replace("/\s+/", ' ', trim($keys));
-  if ($keys && $module) {
-    switch (variable_get('search_log_terms', SEARCH_LOG_TERMS_LOWERCASE)) {
-      case SEARCH_LOG_TERMS_LOWERCASE:
-        $keys = strtolower($keys);
-        break;
-
-      case SEARCH_LOG_TERMS_UPPERCASE_FIRST:
-        $keys = ucfirst(strtolower($keys));
-        break;
-
-      case SEARCH_LOG_STATUS_UPPERCASE_WORDS:
-        $keys = ucwords(strtolower($keys));
-        break;
-    }
-
-    // Get time granularity to day
-    $time = mktime(0, 0, 0, date("m"), date("d"), date("Y"));
-
-    // Set failed to binary
-    $failed = $results ? 0 : 1;
-    
-    if ($qid = db_result(db_query("SELECT qid FROM {search_log} WHERE q='%s' AND module='%s' AND time=%d", $keys, $module, $time))) {
-      db_query("UPDATE {search_log} SET counter = (counter + %d), failed = %d WHERE qid = %d", $counter, $failed, $qid);
-    }
-    else {
-      db_query("INSERT INTO {search_log} (q, module, time, counter, failed) VALUES ('%s', '%s', %d, %d, %d)", $keys, $module, $time, $counter, $failed);
-    }
-  }
-}
-
-/**
- * Menu callback to generate report.
- */
-function search_log_report() {
-  // Get from and to parameters
-  $time = mktime(0, 0, 0, date("m"), date("d"), date("Y"));
-  $today = date('Y-m-d', $time);
-
-  switch (arg(3)) {
-    // Today begins at 00:00
-    case 'today':
-      $from_date = $today;
-      $to_date = $today;
-      break;
-
-    // Week begins on Sunday
-    case 'week':
-      $day = date('w');
-      $from_date = date('Y-m-d', $time - ($day * 86400));
-      $to_date = date('Y-m-d', $time + (6-$day) * 86400);
-      break;
-
-    case 'month':
-      $from_date = date('Y-m-d', mktime(0, 0, 0, date("m"), 1, date("Y")));
-      $to_date = date('Y-m-d', mktime(0, 0, 0, date("m") + 1, 1, date("Y")) - 86400);
-      break;
-
-    case 'year':
-      $from_date = date('Y-m-d', mktime(0, 0, 0, 1, 1, date("Y")));
-      $to_date = date('Y-m-d', mktime(0, 0, 0, 12, 31, date("Y")));
-      break;
-
-    default:
-      $from_date = $_SESSION['search_log']['from'];
-      $to_date = $_SESSION['search_log']['to'];
-      break;
-  }
-
-  $modules = $_SESSION['search_log']['modules'];
-  $status = $_SESSION['search_log']['status'];
-  $rows_n = variable_get('search_log_rows', 50);
-
-  drupal_add_css(drupal_get_path('module', 'search_log') .'/search_log.css');
-  $output .= '<div class="search-log-filter">' . drupal_get_form('search_log_report_form', $from_date, $to_date, $modules, $status) . '</div>';
-  $output .= '<div class="search-log-table">';
-
-  $from_time = strtotime($from_date);
-  $to_time = strtotime($to_date);
-  if ($from_time && $to_time) {
-    $header = array(
-      array('data' => t('Search term'), 'field' => 'q'),
-      array('data' => t('Module'), 'field' => 'module'),
-    );
-    if ($failed_enabled = db_result(db_query('SELECT qid FROM {search_log} WHERE failed = 1 LIMIT 0,1'))) {
-      array_push($header, 
-        array('data' => t('Status'), 'field' => 'failed')
-      );
-    }
-    array_push($header, 
-      array('data' => t('Total'), 'field' => 'total', 'sort' => 'desc')
-    );
-    $rows = array();
-
-    if ($status == SEARCH_LOG_STATUS_SUCCESS) {
-      $where_status = ' AND failed = 0';
-    }
-    else if ($status == SEARCH_LOG_STATUS_FAILED) {
-      $where_status = ' AND failed = 1';
-    }
-
-    if (count($modules)) {
-      $where_modules = ' AND module IN ("' . implode('","', $modules) . '")';
-    }
-
-    $query = 'SELECT q, module, SUM(counter) as total, failed FROM {search_log} WHERE time >= %d AND time <= %d' . $where_modules . $where_status . ' GROUP BY q, module';
-    $query_count = 'SELECT COUNT(DISTINCT q, module) FROM {search_log} WHERE time >= %d AND time <= %d' . $where_modules . $where_status;
-    $result = pager_query($query. tablesort_sql($header), $rows_n, 0, $query_count, $from_time, $to_time);
-    
-    while ($data = db_fetch_object($result)) {
-      $row = array();
-      $row[] = l($data->q, "search/$data->module/$data->q");
-      $row[] = $data->module;
-      if ($failed_enabled) {
-        $row[] = $data->failed ? '<span class="error">' . t('Failed') . '</span>' : '';
-      }
-      $row[] = $data->total;
-      $rows[] = $row;
-    }
-    
-    if ($rows) {
-      $total = db_result(db_query('SELECT SUM(counter) FROM {search_log} WHERE time >= %d AND time <= %d' . $where_modules . $where_status, $from_time, $to_time));
-      $unique = db_result(db_query($query_count, $from_time, $to_time));
-      $failed = ($status == SEARCH_LOG_STATUS_SUCCESS) ? 0 : (($status == SEARCH_LOG_STATUS_FAILED) ? $total : db_result(db_query('SELECT SUM(counter) FROM {search_log} WHERE failed=1 AND time >= %d AND time <= %d' . $where_modules, $from_time, $to_time)));
-      $output .= theme('search_log_report_summary', $total, $unique, $failed);
-      $output .= theme('table', $header, $rows, array('id' => 'search-log'));
-      $output .= theme('pager', array(), $rows_n, 0);
-    }
-    else {
-      $output .= t('No searches found for period.');
-    }
-  }
-
-  $output .= '</div>';
-  return $output;
-}
-
-/**
- * Report filter form.
- */
-function search_log_report_form($from_date = NULL, $to_date = NULL, $modules = array(), $status = NULL) {
-  $form = array();
-
-  // Search period
-  $jscalendar = module_exists('jscalendar') ? TRUE : FALSE;
-  $today = date('Y-m-d');
-
-  $form['period'] = array(
-    '#type'       => 'fieldset',
-    '#title'      => t('Search period'),
-  );
-  
-  $links[] = array(
-    'title' => t('Today'),
-    'href'  => 'admin/logs/search/today'
-  );
-  $links[] = array(
-    'title' => t('This week'),
-    'href'  => 'admin/logs/search/week'
-  );
-  $links[] = array(
-    'title' => t('This month'),
-    'href'  => 'admin/logs/search/month'
-  );
-  $links[] = array(
-    'title' => t('This year'),
-    'href'  => 'admin/logs/search/year'
-  );
-  $form['period']['links']['#value'] = theme('links', $links, array('class' => 'search-log-links'));
-
-  $form['period']['from_date'] = array(
-    '#type'         => 'textfield',
-    '#title'        => t('From'),
-    '#default_value'=> $from_date ? $from_date : $today,
-    '#attributes'   => array('class' => 'jscalendar'),
-    '#jscalendar_ifFormat' => '%Y-%m-%d',
-  );
-
-  $form['period']['to_date'] = array(
-    '#type'         => 'textfield',
-    '#title'        => t('To'),
-    '#default_value'=> $to_date ? $to_date : $today,
-    '#description'  => '<br />' . t('Select custom period for search reporting.'),
-    '#attributes'   => array('class' => 'jscalendar'),
-    '#jscalendar_ifFormat' => '%Y-%m-%d',
-  );
-
-  // Search modules
-  $query = db_query('SELECT DISTINCT module FROM {search_log}');
-  while ($row = db_fetch_object($query)) {
-    $module_options[$row->module] = $row->module;
-  }
-  $module_default = count($modules) ? $modules : array_keys((array)$module_options);
-
-  $form['modules'] = array(
-    '#type'   => 'fieldset',
-    '#title'  => t('Search modules'),
-  );
-
-  $form['modules']['modules'] = array(
-    '#type'          => 'checkboxes',
-    '#description'   => t('Select modules to include in search reporting.'),
-    '#options'       => $module_options,
-    '#default_value' => $module_default,
-  );
-
-  // Search status
-  if (db_result(db_query('SELECT qid FROM {search_log} WHERE failed = 1 LIMIT 0,1'))) {
-    $status_options = array(
-      SEARCH_LOG_STATUS_ALL => t('All'),
-      SEARCH_LOG_STATUS_SUCCESS => t('Success'),
-      SEARCH_LOG_STATUS_FAILED => t('Failed')
-    );
-
-    $form['status'] = array(
-      '#type'          => 'fieldset',
-      '#title'         => t('Search status'),
-    );
-
-    $form['status']['status'] = array(
-      '#type'          => 'radios',
-      '#description'   => t('Select status to include in search reporting.'),
-      '#options'       => $status_options,
-      '#default_value' => $status ? $status : SEARCH_LOG_STATUS_ALL,
-      '#required'      => TRUE,
-    );
-  }
-  else {
-    $form['status'] = array(
-      '#type'          => 'hidden',
-      '#default_value' => SEARCH_LOG_STATUS_ALL,
-    );
-  }
-
-  $form['submit'] = array('#type' => 'submit', '#value' => t('Update Report'));
-  $form['#action'] = url('admin/logs/search');
-  return $form;
-}
-
-/**
- * Report filter form validation.
- */
-function search_log_report_form_validate($form_id, $form_values, $form) {
-  $time = mktime(0, 0, 0, date("m"), date("d"), date("Y"));
-  $today = date('Y-m-d', $time);
-
-  $from = strtotime($form_values['from_date']);
-  if (!$from) {
-    $from = $time;
-  }
-
-  if ($from > $time) {
-    form_set_error('from_date', t('From date cannot be after today.'));
-  }
-
-  $to = strtotime($form_values['to_date']);
-  if (!$to) {
-    $to = $time;
-  }
-
-  if ($from > $to) {
-    form_set_error('from_date', t('From date cannot be after To date.'));
-  }
-
-  $modules = array_flip($form_values['modules']);
-  unset($modules[0]);
-  if (count($modules) < 1) {
-    form_set_error('modules', t('At least one Module must be selected.'));
-  }
-}
-
-/**
- * Report filter submit.
- */
-function search_log_report_form_submit($form_id, $form_values) {
-  $modules = array_flip($form_values['modules']);
-  unset($modules[0]);
-
-  $_SESSION['search_log'] = array(
-    'from' => $form_values['from_date'],
-    'to' => $form_values['to_date'],
-    'modules' => array_keys($modules),
-    'status' => $form_values['status'],
-  );
-}
-
-/**
  * Implementation of hook_cron().
  *
- * Expire outdated search log entries
+ * Expire outdated entries.
  */
 function search_log_cron() {
   if ($days = (int)variable_get('search_log_cron', 0)) {
-    $time = mktime(0, 0, 0, date("m"), date("d") - $days, date("Y"));
-    db_query("DELETE FROM {search_log} WHERE time < %d", $time);
+    // Get timestamp for 12:00 today UTC minus days.
+    $day = mktime(0, 0, 0) - $days * 86400;
+    db_query("DELETE FROM {search_log} WHERE day < %d", $day);
   }
+
+  cache_clear_all(NULL, SEARCH_LOG_BLOCK_CACHE_TABLE);
 }
 
 /**
- * Menu callback for module settings.
+ * Store search keys, module and day.
+ * 
+ * Developers can call this function directly to add additional entries to the 
+ * log or record failed searches (e.g. Lucene integration).
  */
-function search_log_settings() {
-  $form = array();
+function search_log($keys, $module, $counter = 1, $result = 0) {
+  $keys = preg_replace("/\s+/", ' ', trim($keys));
+  $today = _search_log_get_time();
+  // If search_log_preproces is enabled, the default is a failed search.
+  if (!$result && variable_get('search_log_preprocess', FALSE)) {
+    $result = -1;    
+  }
 
-  $form['logging'] = array(
-    '#type'   => 'fieldset',
-    '#title'  => t('Search logging'),
-  );
+  if ($keys && $module) {
+    // Normalize keys.
+    switch (variable_get('search_log_terms', SEARCH_LOG_TERMS_LOWERCASE)) {
+      case SEARCH_LOG_TERMS_LOWERCASE:
+        $keys = drupal_strtolower($keys);
+        break;
 
-  $terms_options = array(
-    SEARCH_LOG_TERMS_LOWERCASE => t('lowercase (%1 = %2)', array('%1' => 'Apple iPod', '%2' => 'apple ipod')),
-    SEARCH_LOG_TERMS_UPPERCASE_FIRST => t('uppercase first word (%1 = %2)', array('%1' => 'Apple iPod', '%2' => 'Apple ipod')),
-    SEARCH_LOG_TERMS_UPPERCASE_WORDS => t('uppercase all words (%1 = %2)', array('%1' => 'Apple iPod', '%2' => 'Apple Ipod')),
-  );
-  $form['logging']['search_log_terms'] = array(
-    '#type'          => 'radios',
-    '#title'         => t('Search term normalization'),
-    '#description'   => t('Select how search terms will be logged.'),
-    '#options'       => $terms_options,
-    '#default_value' => variable_get('search_log_terms', SEARCH_LOG_TERMS_LOWERCASE),
-  );
+      case SEARCH_LOG_TERMS_UPPERCASE_FIRST:
+        $keys = drupal_ucfirst($keys);
+        break;
 
-  foreach (module_list() as $name) {
-    if (module_hook($name, 'search') && $title = module_invoke($name, 'search', 'name')) {
-      $module_options[$name] = $name;
+      case SEARCH_LOG_TERMS_UPPERCASE_WORDS:
+        $keys = ucwords(drupal_strtolower($keys));
+        break;
+    }
+
+    if ($qid = db_result(db_query("SELECT qid FROM {search_log} WHERE q='%s' AND module='%s' AND day=%d", $keys, $module, $today))) {
+      db_query("UPDATE {search_log} SET counter = (counter + %d), result = %d WHERE qid = %d", $counter, $result, $qid);
+    }
+    else {
+      db_query("INSERT INTO {search_log} (q, module, day, counter, result) VALUES ('%s', '%s', %d, %d, %d)", $keys, $module, $today, $counter, $result);
     }
   }
-  $form['logging']['search_log_modules'] = array(
-    '#type'          => 'checkboxes',
-    '#title'         => t('Modules'),
-    '#description'   => t('Select modules to exclude from search logging. By default, all modules which implement hook_search() will be included.'),
-    '#options'       => $module_options,
-    '#default_value' => variable_get('search_log_modules', NULL),
-  );
-
-  $form['report'] = array(
-    '#type'   => 'fieldset',
-    '#title'  => t('Search report'),
-  );
-
-  if (module_exists('jscalendar')) {
-    $form['report']['search_log_jscalendar']['#value'] = '<p>' . t('JS Calendar is installed and will be used to select dates in the Search period parameter.') . '</p>';
-  }
-  else {
-    $form['report']['search_log_jscalendar']['#value'] = '<p>' . t('JS Calendar is not installed. Dates will need to be entered manually in the Search period parameter.') . '</p>';
-  }
-
-  $form['report']['search_log_rows'] = array(
-    '#type'          => 'textfield',
-    '#title'         => t('Rows'),
-    '#description'   => t('Number of rows in search report page.'),
-    '#size'          => 4,
-    '#default_value' => variable_get('search_log_rows', 50),
-  );
-
-  $form['index'] = array(
-    '#type'   => 'fieldset',
-    '#title'  => t('Search log'),
-  );
-
-  $count = db_result(db_query('SELECT COUNT(qid) FROM {search_log}'));
-  $form['index']['search_log_jscalendar']['#value'] = '<p>' . t('There are %count entries in the Search Log table. !delete', array('%count' => number_format($count), '!delete' => l(t('Delete log'), 'admin/settings/search/search_log/delete'))) . '</p>';
-
-  $form['index']['search_log_cron'] = array(
-    '#type'          => 'textfield',
-    '#title'         => t('Days to keep search log'),
-    '#description'   => t('Search log table can be automatically truncated by cron. By default, the search log table will never be truncated.'),
-    '#size'          => 4,
-    '#default_value' => variable_get('search_log_cron', 0),
-  );
-
-  return system_settings_form($form);
 }
 
 /**
- * Menu callback to delete table.
+ * Process search results.
+ *
+ * The $variables array contains the following arguments:
+ * - $results
+ * - $type
+ *
+ * Search does not have a hook to obtain the number of search results. This
+ * theme function is called only if there are results. In addition, some 
+ * modules may bypass this function if it implements the op search_page.
+ * 
+ * @see search_view(), search_data(), template_preprocess_search_results()
  */
-function search_log_confirm_delete() {
-  $form = array();
-  return confirm_form(
-    $form,
-    t('Are you sure you want to delete the search log?'),
-    'admin/settings/search/search_log',
-    t('This action cannot be undone.'),
-    t('Delete'),
-    t('Cancel'));
-}
+function search_log_preprocess_search_results(&$variables) {
+  if (!variable_get('search_log_preprocess', FALSE)) return;
 
-/**
- * Delete table submit.
- */
-function search_log_confirm_delete_submit($form_id, $form_values) {
-  db_query("TRUNCATE {search_log}");
-  drupal_set_message(t('The Search Log has been deleted.'));
-  return 'admin/settings/search/search_log';
+  $keys = urldecode(arg(2));
+  $module = $variables['type'];
+  $today = _search_log_get_time();
+  $result = count($variables['results']);
+  
+  if ($qid = db_result(db_query("SELECT qid FROM {search_log} WHERE q='%s' AND module='%s' AND day=%d", $keys, $module, $today))) {
+    db_query("UPDATE {search_log} SET result = %d WHERE qid = %d", $result, $qid);
+  }
 }
 
 /**
@@ -503,7 +217,7 @@ function search_log_block($op = 'list', $delta = 0, $edit = array()) {
     case 'view':
       switch ($delta) {
         case SEARCH_LOG_BLOCK:
-          if ($items = search_log_items()) {
+          if ($items = _search_log_items()) {
             $block['subject'] = t("Top Searches");
             $block['content'] = theme('search_log_block', $items);
           }
@@ -514,16 +228,24 @@ function search_log_block($op = 'list', $delta = 0, $edit = array()) {
     case 'configure':
       $form['search_log_block_max'] = array(
         '#type'          => 'textfield',
-        '#title'         => t('Maximum number of terms'),
+        '#title'         => t('Maximum number of search terms'),
         '#size'          => 4,
         '#default_value' => variable_get('search_log_block_max', 10),
       );
 
-      $form['logging']['search_log_block_count'] = array(
+      $form['search_log_block_count'] = array(
         '#type'          => 'radios',
         '#title'         => t('Display search count for terms?'),
         '#options'       => array(t('No'), t('Yes')),
         '#default_value' => variable_get('search_log_block_count', 0),
+      );
+
+      $form['search_log_block_days'] = array(
+        '#type'          => 'textfield',
+        '#title'         => t('Number of days for search terms'),
+        '#description'   => t('Enter number of days for terms in Top Searches block. Enter 0 for all days.'),
+        '#size'          => 4,
+        '#default_value' => variable_get('search_log_block_days', 0),
       );
 
       foreach (module_list() as $name) {
@@ -534,15 +256,15 @@ function search_log_block($op = 'list', $delta = 0, $edit = array()) {
       $form['search_log_block_modules'] = array(
         '#type'          => 'checkboxes',
         '#title'         => t('Modules'),
-        '#description'   => t('Select modules to exclude from Top Searches block. By default, all modules which implement hook_search() will be included.'),
+        '#description'   => t('Select modules to include in Top Searches block. If no modules are checked, all modules will be included.'),
         '#options'       => $module_options,
-        '#default_value' => variable_get('search_log_block_modules', NULL),
+        '#default_value' => variable_get('search_log_block_modules', array()),
       );
 
       $form['search_log_block_manual'] = array(
         '#type'          => 'textarea',
         '#title'         => t('Manually included terms'),
-        '#description'   => t('Enter term|module|count to be included in Top Searches block. For example, apple ipod|node|1 would link to search/node/apple+ipod.'),
+        '#description'   => t('Enter term|module|count to be included in Top Searches block. For example, apple ipod|node|100 would link to search/node/apple+ipod.'),
         '#rows'          => 5,
         '#default_value' => variable_get('search_log_block_manual', NULL),
       );
@@ -552,76 +274,12 @@ function search_log_block($op = 'list', $delta = 0, $edit = array()) {
     case 'save':
       variable_set('search_log_block_max', $edit['search_log_block_max']);
       variable_set('search_log_block_count', $edit['search_log_block_count']);
+      variable_set('search_log_block_days', $edit['search_log_block_days']);
       variable_set('search_log_block_modules', $edit['search_log_block_modules']);
       variable_set('search_log_block_manual', $edit['search_log_block_manual']);
       cache_clear_all(SEARCH_LOG_BLOCK_CACHE, 'cache', TRUE);
       break;
   }
-}
-
-/**
- * Block handler
- */
-function search_log_items() {
-  $cache_id = SEARCH_LOG_BLOCK_CACHE;
-
-  if ($cache = cache_get($cache_id)) {
-    $items = unserialize($cache->data);
-  }
-  else {
-    $max = variable_get('search_log_block_max', 10);
-    $terms_manual = array();
-
-    $terms = explode("\n", variable_get('search_log_block_manual', NULL));
-    foreach ($terms as $term) {
-      list($item['q'], $item['module'], $item['count']) = explode('|', $term);
-      if (isset($item['q']) && isset($item['module'])) {
-        $items[] = $item;
-        $terms_manual[] = $item['q'];
-        $max--;
-      }
-      unset($item);
-    }
-
-    $modules = array_flip((array)variable_get('search_log_block_modules', NULL));
-    unset($modules[0]);
-    if (count($modules)) {
-      $where_modules = ' AND module NOT IN ("' . implode('","', $modules) . '")';
-    }
-
-    $query = db_query('SELECT q, module, SUM(counter) as count FROM {search_log} WHERE failed = 0' . $where_modules . ' GROUP BY q, module ORDER BY count DESC LIMIT 0,' . $max);
-
-    while ($max && $item = db_fetch_array($query)) {
-      if (!in_array($item['q'], $terms_manual)) {
-        $items[] = $item;
-        $max--;
-      }
-    }
-
-    uasort($items, 'search_log_items_sort');
-
-    cache_set($cache_id, 'cache', serialize($items), CACHE_TEMPORARY);
-  }
-
-  return $items;
-}
-
-/**
- * Utility sort function.
- */
-function search_log_items_sort($a, $b) {
-  return (strcmp ($b['count'], $a['count']));
-}
-
-/**
- * Theme report summary information.
- */
-function theme_search_log_report_summary($total = 0, $unique = 0, $failed = 0) {
-  $output  = '<div><strong>Total searches:</strong> ' . $total . '</div>';
-  $output .= '<div><strong>Total unique search terms:</strong> ' . $unique . ' (' . sprintf("%01.2f", 100*$unique/$total) . '%)</div>';
-  $output .= '<div><strong>Total failed searches:</strong> ' . $failed . ' (' . sprintf("%01.2f", 100*$failed/$total) . '%)</div>';
-
-  return $output;
 }
 
 /**
@@ -636,4 +294,84 @@ function theme_search_log_block($items) {
     $links[] = l($item['q'], 'search/' . $item['module'] . '/' . $item['q']) . '<span class="item-count">' . $count . '</span>';
   }
   return theme('item_list', $links);
+}
+
+/**
+ * Internal function to generate cached top search terms.
+ * 
+ * Block cache is 1 hour and cleared on cron.
+ */
+function _search_log_items() {
+  if ($cache = cache_get(SEARCH_LOG_BLOCK_CACHE, SEARCH_LOG_BLOCK_CACHE_TABLE)) {
+    $items = unserialize($cache->data);
+  }
+  else {
+    $max = variable_get('search_log_block_max', 10);
+    $terms_manual = array();
+
+    $terms = explode("\n", variable_get('search_log_block_manual', NULL));
+    foreach ($terms as $term) {
+      if ($term) {
+        list($item['q'], $item['module'], $item['count']) = explode('|', $term);
+        if (isset($item['q']) && isset($item['module'])) {
+          $items[] = $item;
+          $terms_manual[] = $item['q'];
+          $max--;
+        }
+        unset($item);
+      }
+    }
+
+    $query_where_days = '';
+    if ($days = variable_get('search_log_block_days', 0)) {
+      $today = _search_log_get_time();
+      $from_time = $today - ($days * 86400);
+      $query_where_days = ' AND day >= ' . $from_time;
+    }
+    
+    $modules = array_flip(variable_get('search_log_block_modules', array()));
+    $query_where_modules = '';
+    unset($modules[0]);
+    if (!empty($modules)) {
+      $query_where_modules = ' AND module IN ("' . implode('","', $modules) . '")';
+    }
+
+    if ($max > 0) {
+      $query = db_query_range('SELECT q, module, SUM(counter) as count FROM {search_log} WHERE result >= 0' . $query_where_days . $query_where_modules . ' GROUP BY q, module ORDER BY count DESC', 0, $max);
+      while ($max && $item = db_fetch_array($query)) {
+        if (!in_array($item['q'], $terms_manual)) {
+          $items[] = $item;
+          $max--;
+        }
+      }
+    }
+
+    uasort($items, '_search_log_items_sort');
+
+    cache_set(SEARCH_LOG_BLOCK_CACHE, serialize($items), SEARCH_LOG_BLOCK_CACHE_TABLE, time() + 3600);
+  }
+
+  return $items;
+}
+
+/**
+ * Utility time function.
+ * 
+ * Effectively returns time() rounded down to nearest day.
+ */
+function _search_log_get_time() {
+  static $today;
+
+  if (!isset($today)) {
+    $today = mktime(0, 0, 0);
+  }
+  
+  return $today;
+}
+
+/**
+ * Utility sort function.
+ */
+function _search_log_items_sort($a, $b) {
+  return $b['count'] > $a['count'] ? TRUE : FALSE;
 }

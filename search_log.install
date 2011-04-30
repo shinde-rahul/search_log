@@ -1,53 +1,84 @@
 <?php
 
-function search_log_install() {
-  switch ($GLOBALS['db_type']) {
-    case 'mysql':
-    case 'mysqli':
-      $table1 = db_query("CREATE TABLE {search_log} (
-        qid int(11) NOT NULL AUTO_INCREMENT,
-        q varchar(255) NOT NULL,
-        module varchar(255) NOT NULL,
-        time int(11) NULL DEFAULT '0',
-        counter int(11) NULL DEFAULT '0',
-        failed tinyint(1) UNSIGNED NULL DEFAULT '0',
-        PRIMARY KEY (qid),
-        UNIQUE KEY (q,module(50),time)
-      ) /*!40100 DEFAULT CHARACTER SET utf8 */ ENGINE=MYISAM;");
-      break;
+/**
+ * @file
+ * Install file for Search log.
+ */
 
-    default:
-      drupal_set_message(t('Database type not supported by Saarch Log.'), 'error');
-      break;
-  }
+/**
+ * Implementation of hook_schema().
+ */
+function search_log_schema() {
+  $schema['search_log'] = array(
+    'description' => t('Log of search terms.'),
+    'fields' => array(
+      'qid' => array(
+        'type' => 'serial',
+        'not null' => TRUE,
+        'description' => 'Primary Key: Auto-incrementing query ID.',
+      ),
+      'q' => array(
+        'description' => t('Search term.'),
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'module' => array(
+        'description' => t('Module implementing search.'),
+        'type' => 'varchar',
+        'length' => 64,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'day' => array(
+        'description' => t('Day search was performed.'),
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'counter' => array(
+        'description' => t('Number of times search performed on day.'),
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'size' => 'medium',
+      ),
+      'result' => array(
+        'description' => t('Indicator of failed or successful searches.'),
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+    ),
+    'primary key' => array('qid'),
+    'unique keys' => array(
+      'qmt' => array('q', 'module', 'time'),
+    ),
+  );
 
-  if ($table1) {
-    drupal_set_message(t('Search Log installed successfully.'));
-  }
-  else {
-    drupal_set_message(t('Search Log installation unsuccessful. Tables may need to be installed manually.'), 'error');
-  }
+  return $schema;
 }
 
+/**
+ * Implementation of hook_install().
+ */
+function search_log_install() {
+  drupal_install_schema('search_log');
+  drupal_set_message(st('Search log table installed. !config', array(
+    '!config' => l(st('Configure Search log'), 'admin/settings/search/search_log')
+  )));
+}
+
+/**
+ * Implementation of hook_uninstall().
+ */
 function search_log_uninstall() {
-  if (db_table_exists('search_log')) {
-    db_query("DROP TABLE {search_log}");
-  }
-
-  $vars = array(
-    'search_log_terms',
-    'search_log_modules',
-    'search_log_rows',
-    'search_log_cron',
-    'search_log_block_max',
-    'search_log_block_count',
-    'search_log_block_modules',
-    'search_log_block_manual',
-  );
-  foreach ($vars as $var) {
-    variable_del($var);
-  }
-
-  drupal_set_message(t('Search Log tables and variables removed.'));
-  cache_clear_all();
+  drupal_uninstall_schema('search_log');
+  db_query("DELETE FROM {variable} WHERE name LIKE 'search_log_%'");
+  cache_clear_all('variables', 'cache');
+  drupal_set_message(t('Search log table and variables removed.'));
 }
