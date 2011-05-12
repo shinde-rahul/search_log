@@ -56,7 +56,7 @@ function search_log_schema() {
     ),
     'primary key' => array('qid'),
     'unique keys' => array(
-      'qmt' => array('q', 'module', 'time'),
+      'qmd' => array('q', 'module', 'day'),
     ),
   );
 
