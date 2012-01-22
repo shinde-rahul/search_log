@@ -110,6 +110,10 @@ function search_log_form_alter(&$form, &$form_state, $form_id) {
     $form_id_processed = 'custom_search_blocks_form';
   }
   
+  if (!isset($form['#submit'])){
+    $form['#submit'] = array();
+  }
+
   switch ($form_id_processed) {
     case 'search_form':
       array_unshift($form['#submit'], 'search_log_search_form_submit');
